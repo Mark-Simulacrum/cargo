@@ -144,7 +144,7 @@ impl<'cfg> RegistryIndex<'cfg> {
             name,
             vers,
             cksum,
-            deps,
+            mut deps,
             features,
             yanked,
             links,
@@ -155,6 +155,17 @@ impl<'cfg> RegistryIndex<'cfg> {
             res
         })?;
         let pkgid = PackageId::new(&name, &vers, &self.source_id)?;
+
+        if let Some(implicit_deps) = self.config.cli_unstable().implicit_deps.get(&pkgid) {
+            deps.inner.extend(implicit_deps.iter().map(|pkgid| {
+                Dependency::parse_no_deprecated(
+                    &pkgid.name(),
+                    Some(&pkgid.version().to_string()),
+                    pkgid.source_id()
+                ).unwrap()
+            }));
+        }
+
         let summary = Summary::new(pkgid, deps.inner, features, links)?;
         let summary = summary.set_checksum(cksum.clone());
         if self.hashes.contains_key(&name[..]) {
