@@ -116,3 +116,6 @@ doc = false
 deny-warnings = []
 vendored-openssl = ["openssl/vendored"]
 pretty-env-logger = ["pretty_env_logger"]
+
+[patch.crates-io]
+jobserver = { git = "https://github.com/Mark-Simulacrum/jobserver-rs", branch = "sem" }
