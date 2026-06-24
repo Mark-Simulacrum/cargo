@@ -8,9 +8,7 @@ use std::io::Cursor;
 use std::io::Read;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::atomic::AtomicI64;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
+use std::sync::Mutex;
 use std::sync::mpsc;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
@@ -64,8 +62,28 @@ struct Message {
 
 #[derive(Default)]
 struct Stats {
-    dl_remaining: AtomicI64,
-    dl_transferred: AtomicU64,
+    dl_remaining: Mutex<i64>,
+    dl_transferred: Mutex<u64>,
+}
+
+impl Stats {
+    fn dl_remaining(&self) -> i64 {
+        *self.dl_remaining.lock().unwrap()
+    }
+
+    fn dl_transferred(&self) -> u64 {
+        *self.dl_transferred.lock().unwrap()
+    }
+
+    fn dl_remaining_add(&self, v: i64) {
+        let mut guard = self.dl_remaining.lock().unwrap();
+        *guard += v;
+    }
+
+    fn dl_transferred_add(&self, v: u64) {
+        let mut guard = self.dl_transferred.lock().unwrap();
+        *guard += v;
+    }
 }
 
 /// HTTP Client. Creating a new client spawns a cURL `Multi` and
@@ -153,11 +171,7 @@ impl Client {
 
     /// Returns the number pending bytes across all active transfers.
     pub fn bytes_pending(&self) -> u64 {
-        self.stats
-            .dl_remaining
-            .load(Ordering::Acquire)
-            .try_into()
-            .unwrap()
+        self.stats.dl_remaining().try_into().unwrap()
     }
 }
 
@@ -245,7 +259,7 @@ impl WorkerServer {
     /// Marks the start of a new timeout window.
     fn reset_low_speed_timeout(&mut self) {
         self.low_speed_window_start = Instant::now();
-        self.low_speed_window_initial = self.stats.dl_transferred.load(Ordering::Acquire);
+        self.low_speed_window_initial = self.stats.dl_transferred().try_into().unwrap();
     }
 
     /// Return an error if we're at the end of a timeout window, we haven't
@@ -257,7 +271,7 @@ impl WorkerServer {
         }
 
         // Calculate how much we've transferred since the last check.
-        let current = self.stats.dl_transferred.load(Ordering::Acquire);
+        let current = self.stats.dl_transferred();
         let transferred = current.saturating_sub(self.low_speed_window_initial);
         self.reset_low_speed_timeout();
         if transferred < self.timeout.low_speed_limit.into() {
@@ -423,9 +437,7 @@ impl Collector {
 impl Handler for Collector {
     fn write(&mut self, data: &[u8]) -> Result<usize, WriteError> {
         self.response.body_mut().extend_from_slice(data);
-        self.global_stats
-            .dl_transferred
-            .fetch_add(data.len() as u64, Ordering::Release);
+        self.global_stats.dl_transferred_add(data.len() as u64);
         Ok(data.len())
     }
 
@@ -459,8 +471,7 @@ impl Handler for Collector {
         let remaining = dl_total - dl_current;
 
         self.global_stats
-            .dl_remaining
-            .fetch_add(remaining - self.dl_remaining_delta, Ordering::Release);
+            .dl_remaining_add(remaining - self.dl_remaining_delta);
         self.dl_remaining_delta = remaining;
         true
     }
@@ -469,9 +480,7 @@ impl Handler for Collector {
 impl Drop for Collector {
     fn drop(&mut self) {
         // Zero out this transfer's contribution to the global dl_remaining.
-        self.global_stats
-            .dl_remaining
-            .fetch_add(-self.dl_remaining_delta, Ordering::Release);
+        self.global_stats.dl_remaining_add(-self.dl_remaining_delta);
     }
 }
 
